@@ -1,5 +1,5 @@
 """Task: intent classification over 77 banking intents (PolyAI banking77, real customer queries).
-A narrow task a frontier model does well -> good distillation candidate."""
+A narrow task a capable teacher model can do well -> good distillation candidate."""
 import json, os, re, time
 from dotenv import load_dotenv
 
@@ -9,9 +9,8 @@ DATA = os.path.join(ROOT, "data")
 RESULTS = os.path.join(ROOT, "results")
 os.makedirs(DATA, exist_ok=True); os.makedirs(RESULTS, exist_ok=True)
 
-TEACHER_MODEL = os.getenv("TEACHER_MODEL", "claude-sonnet-4-5")
-PRICE_IN = float(os.getenv("TEACHER_PRICE_IN", "3.0"))
-PRICE_OUT = float(os.getenv("TEACHER_PRICE_OUT", "15.0"))
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:3b")
 STUDENT_BASE = os.getenv("STUDENT_BASE", "Qwen/Qwen2.5-7B-Instruct")
 
 STUDENT_SYSTEM = 'Classify the banking customer message into one intent. Reply with JSON only: {"intent": "<intent_label>"}'
@@ -66,29 +65,36 @@ _client = None
 def teacher_classify(text: str, labels):
     """Returns (intent|None, input_tokens, output_tokens, latency_s)."""
     global _client
-    import anthropic
-    _client = _client or anthropic.Anthropic()
-    tool = {"name": "classify", "description": "Return the intent",
-            "input_schema": {"type": "object", "properties": {"intent": {"type": "string", "enum": labels}}, "required": ["intent"]}}
+    from httpx import HTTPError
+    from ollama import Client, ResponseError
+
+    _client = _client or Client(host=OLLAMA_BASE_URL)
+    schema = {"type": "object",
+              "properties": {"intent": {"type": "string", "enum": labels}},
+              "required": ["intent"], "additionalProperties": False}
     t0 = time.time()
     for attempt in range(4):
         try:
-            msg = _client.messages.create(
-                model=TEACHER_MODEL, max_tokens=50, temperature=0,
-                system="Classify the banking customer message into exactly one of the allowed intents.",
-                tools=[tool], tool_choice={"type": "tool", "name": "classify"},
-                messages=[{"role": "user", "content": text}])
+            response = _client.chat(
+                model=OLLAMA_MODEL,
+                messages=[
+                    {"role": "system", "content": "Classify the banking customer message into exactly one of the allowed intents."},
+                    {"role": "user", "content": text},
+                ],
+                format=schema,
+                options={"temperature": 0, "num_predict": 50},
+            )
             break
-        except Exception as e:  # noqa - rate limits
+        except (HTTPError, ResponseError) as e:
             if attempt == 3:
-                return None, 0, 0, time.time() - t0
+                raise RuntimeError(
+                    f"Ollama request failed for model {OLLAMA_MODEL!r} at {OLLAMA_BASE_URL!r}"
+                ) from e
             time.sleep(2 ** attempt)
-    intent = next((b.input.get("intent") for b in msg.content if b.type == "tool_use"), None)
-    return (intent if intent in labels else None), msg.usage.input_tokens, msg.usage.output_tokens, time.time() - t0
-
-
-def teacher_cost(in_tok, out_tok):
-    return in_tok / 1e6 * PRICE_IN + out_tok / 1e6 * PRICE_OUT
+    content = response.message.content or ""
+    intent = parse_intent(content, labels)
+    return (intent, response.prompt_eval_count or 0, response.eval_count or 0,
+            time.time() - t0)
 
 
 def pct(xs, p):

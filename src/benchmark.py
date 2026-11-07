@@ -2,7 +2,7 @@
 Requires vLLM running (src/serve.sh). Run: python -m src.benchmark --n 1000 --concurrency 8"""
 import argparse, asyncio, json, os, time
 from openai import AsyncOpenAI
-from .common import splits, teacher_classify, teacher_cost, parse_intent, pct, RESULTS, STUDENT_SYSTEM
+from .common import splits, teacher_classify, parse_intent, pct, RESULTS, STUDENT_SYSTEM
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--n", type=int, default=1000)
@@ -53,17 +53,19 @@ res = {"n": len(rows), "concurrency": a.concurrency, "student": {
 if not a.skip_teacher:
     t_outs = asyncio.run(run_teacher())
     t_acc = sum(o[0] == g for o, g in zip(t_outs, gold)) / len(gold)
-    t_cost = teacher_cost(sum(o[1] for o in t_outs), sum(o[2] for o in t_outs))
     res["teacher"] = {"accuracy": t_acc, "p50_ms": pct([o[3] for o in t_outs], .5) * 1000,
-                      "p95_ms": pct([o[3] for o in t_outs], .95) * 1000, "cost_per_1k_usd": t_cost / len(rows) * 1000}
+                      "p95_ms": pct([o[3] for o in t_outs], .95) * 1000,
+                      "llm_api_cost_per_1k_usd": 0.0}
     res["student"]["pct_of_teacher_quality"] = s_acc / t_acc if t_acc else None
 json.dump(res, open(os.path.join(RESULTS, "benchmark.json"), "w"), indent=2)
 
-lines = ["| | Accuracy (test) | Cost / 1k req | p50 | p95 |", "|---|---|---|---|---|"]
+lines = ["| | Accuracy (test) | LLM API / hardware cost per 1k req | p50 | p95 |", "|---|---|---|---|---|"]
 for k in ("teacher", "student"):
     if k in res:
         r = res[k]
-        lines.append(f"| {k} | {r['accuracy']:.1%} | ${r['cost_per_1k_usd']:.3f} | {r['p50_ms']:.0f} ms | {r['p95_ms']:.0f} ms |")
+        cost_key = "llm_api_cost_per_1k_usd" if k == "teacher" else "cost_per_1k_usd"
+        cost_basis = "API" if k == "teacher" else "GPU"
+        lines.append(f"| {k} | {r['accuracy']:.1%} | ${r[cost_key]:.3f} ({cost_basis}) | {r['p50_ms']:.0f} ms | {r['p95_ms']:.0f} ms |")
 open(os.path.join(RESULTS, "benchmark.md"), "w").write("\n".join(lines))
 print("\n".join(lines))
 print(json.dumps(res, indent=2))
