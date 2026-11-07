@@ -1,4 +1,4 @@
-"""Phase 3: LoRA / QLoRA fine-tune of a 7-8B student, everything logged to W&B.
+"""Phase 3: LoRA / QLoRA fine-tune of a 1.5B student, everything logged to W&B.
 Train two configs to get a real trade-off:
   python -m src.train --rank 8  --out outputs/r8
   python -m src.train --rank 32 --out outputs/r32 --qlora"""
@@ -26,9 +26,11 @@ a = ap.parse_args()
 run = wandb.init(project=os.getenv("WANDB_PROJECT", "distill-banking77"), name=os.path.basename(a.out), config=vars(a))
 tok = AutoTokenizer.from_pretrained(STUDENT_BASE)
 tok.pad_token = tok.pad_token or tok.eos_token
-qcfg = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.bfloat16,
+use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+compute_dtype = torch.bfloat16 if use_bf16 else torch.float16 if torch.cuda.is_available() else torch.float32
+qcfg = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=compute_dtype,
                           bnb_4bit_use_double_quant=True) if a.qlora else None
-model = AutoModelForCausalLM.from_pretrained(STUDENT_BASE, torch_dtype=torch.bfloat16, device_map="auto", quantization_config=qcfg)
+model = AutoModelForCausalLM.from_pretrained(STUDENT_BASE, torch_dtype=compute_dtype, device_map="auto", quantization_config=qcfg)
 if a.qlora:
     model = prepare_model_for_kbit_training(model)
 else:
@@ -90,7 +92,8 @@ class ValAccuracy(TrainerCallback):
 args = TrainingArguments(
     output_dir=a.out, num_train_epochs=a.epochs, learning_rate=a.lr, lr_scheduler_type="cosine", warmup_ratio=0.03,
     per_device_train_batch_size=a.batch, per_device_eval_batch_size=a.batch, gradient_accumulation_steps=a.grad_accum,
-    bf16=True, logging_steps=10, eval_strategy="epoch", save_strategy="epoch", save_total_limit=2,
+    bf16=use_bf16, fp16=torch.cuda.is_available() and not use_bf16,
+    logging_steps=10, eval_strategy="epoch", save_strategy="epoch", save_total_limit=2,
     load_best_model_at_end=True, metric_for_best_model="eval_loss", report_to=["wandb"], gradient_checkpointing=True,
     remove_unused_columns=False)
 trainer = Trainer(model=model, args=args, train_dataset=train, eval_dataset=val, data_collator=collate, callbacks=[ValAccuracy()])

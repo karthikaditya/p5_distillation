@@ -11,7 +11,7 @@ os.makedirs(DATA, exist_ok=True); os.makedirs(RESULTS, exist_ok=True)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:3b")
-STUDENT_BASE = os.getenv("STUDENT_BASE", "Qwen/Qwen2.5-7B-Instruct")
+STUDENT_BASE = os.getenv("STUDENT_BASE", "Qwen/Qwen2.5-1.5B-Instruct")
 
 STUDENT_SYSTEM = 'Classify the banking customer message into one intent. Reply with JSON only: {"intent": "<intent_label>"}'
 
