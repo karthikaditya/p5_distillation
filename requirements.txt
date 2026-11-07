@@ -1,0 +1,16 @@
+# training / data
+torch>=2.3
+transformers>=4.44
+peft>=0.12
+bitsandbytes>=0.43 ; platform_system == "Linux"
+accelerate>=0.33
+datasets>=2.20
+wandb>=0.17
+# teacher
+anthropic>=0.40
+# serving + benchmark (vLLM is installed on the GPU box: pip install vllm)
+openai>=1.40
+fastapi>=0.110
+uvicorn[standard]>=0.29
+numpy>=1.26
+python-dotenv>=1.0
