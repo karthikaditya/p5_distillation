@@ -34,91 +34,123 @@ Configure `OLLAMA_MODEL` and `OLLAMA_BASE_URL` in `.env` to select the local tea
 
 During Phase 2, the generation script reports progress for near-duplicate removal and Ollama labeling, including processing rate and estimated time remaining.
 
-## Fine-tune on Google Colab (T4)
+## Complete Google Colab notebook
 
-If your computer has no GPU, use a Colab GPU runtime for the training phase. A T4 with 15 GB of GPU memory is a reasonable starting point for QLoRA on the default 1.5B student. Colab GPU availability and runtime duration are not guaranteed; save your data and outputs to Google Drive. The training code automatically selects BF16 on supported GPUs and FP16 on a T4.
+The following steps run the teacher, data generation, training, persistence, and inference entirely in a Colab GPU session. Colab resource availability and session limits still apply. The T4 is suitable for QLoRA, and the training script automatically uses FP16 on a T4.
 
-The teacher remains Ollama's `qwen2.5-coder:3b`. Generate the labeled examples on your computer first, then transfer the train/validation files to Colab. Colab only runs the student fine-tuning; it does not need to run Ollama.
+Run each section in one Colab notebook. The notebook can contain shell commands with `!` and project Python commands with `!python`.
 
-### 1. Generate training data on your computer
+### 1. Select a GPU runtime and mount Drive
 
-Install the project dependencies and make sure Ollama is running with the teacher model available:
-
-```powershell
-ollama pull qwen2.5-coder:3b
-python -m src.generate --limit 6000
-```
-
-This creates `data/train.jsonl` and `data/val.jsonl`. Confirm both files exist and contain data. Upload them to a Google Drive folder such as `MyDrive/p5_distillation/data/`. Do not upload `.env`; keep credentials and local configuration out of the notebook and repository.
-
-### 2. Push the updated code to GitHub
-
-Commit or push the current project version, including the T4-compatible dtype selection in `src/train.py`, to a repository Colab can access. For a private repository or unpushed changes, upload the source files to Drive instead and copy them into the Colab runtime. Do not include `.env` or credentials.
-
-### 3. Create a Colab notebook and select the T4
-
-Open [Google Colab](https://colab.research.google.com/), create a notebook, then choose **Runtime → Change runtime type → T4 GPU** and save. Mount Google Drive in a code cell:
+Choose **Runtime → Change runtime type → T4 GPU**.
 
 ```python
 from google.colab import drive
 drive.mount("/content/drive")
 ```
 
-Verify that the runtime sees the GPU:
-
 ```bash
 !nvidia-smi
 ```
 
-If no GPU is listed, check the runtime type and reconnect before proceeding.
+The GPU check must show a CUDA device. If it does not, reconnect or change the runtime type before continuing.
 
-### 4. Clone the project and copy the data
+### 2. Clone the project
 
-For a public GitHub repository, replace the URL below with the repository URL:
+Replace the URL with this repository URL. For a private repository, give Colab access through GitHub or place a clone of the private repository on Drive; do not paste a personal access token into a notebook.
 
 ```bash
 %cd /content
-!git clone <your-repository-url> p5_distillation
+!git clone https://github.com/karthikaditya/p5_distillation.git
 %cd /content/p5_distillation
 ```
 
-For a private repository, authenticate using a method appropriate for your account, or copy the source from Drive. Do not put an access token directly into a notebook cell.
+If the repository directory already exists, reconnect to its existing runtime or remove the old clone in a separate cleanup step before cloning again.
 
-Copy the data files from Drive and verify they are present:
-
-```bash
-!mkdir -p data
-!cp /content/drive/MyDrive/p5_distillation/data/train.jsonl data/
-!cp /content/drive/MyDrive/p5_distillation/data/val.jsonl data/
-!ls -lh data/train.jsonl data/val.jsonl
-```
-
-Adjust the Drive path if you chose a different folder.
-
-### 5. Install training dependencies
-
-Install the training packages in the Colab runtime. vLLM is not needed for fine-tuning:
+### 3. Create a persistent Drive directory
 
 ```bash
-%pip install -q "transformers>=4.44" "peft>=0.12" "accelerate>=0.33" "datasets>=2.20" "wandb>=0.17" "bitsandbytes>=0.43" "python-dotenv>=1.0"
+!mkdir -p /content/drive/MyDrive/p5_distillation/{data,outputs,results}
+%cd /content/p5_distillation
 ```
 
-If Colab requests a runtime restart, restart it, then remount Drive, return to `/content/p5_distillation`, and recopy the data files.
+### 4. Install Python dependencies
 
-### 6. Authenticate W&B
+vLLM is not required for Colab fine-tuning or single-example inference.
 
-The training script logs metrics to Weights & Biases. Authenticate in a notebook cell:
+```bash
+%pip install -q "transformers>=4.44" "peft>=0.12" "accelerate>=0.33" "datasets>=2.20" "wandb>=0.17" "bitsandbytes>=0.43" "ollama>=0.4" "python-dotenv>=1.0"
+```
+
+If Colab asks to restart the runtime after installation, restart it, remount Drive, and return to `/content/p5_distillation` before continuing.
+
+### 5. Start Ollama and install the teacher
+
+This runs Ollama inside Colab. The first pull can take several minutes.
+
+```bash
+!curl -fsSL https://ollama.com/install.sh | sh
+!nohup ollama serve >/tmp/ollama.log 2>&1 &
+```
+
+Wait for Ollama to respond, then pull the teacher:
+
+```bash
+!for i in {1..30}; do curl -fsS http://localhost:11434/api/tags >/dev/null && break; sleep 2; done
+!ollama list
+!ollama pull qwen2.5-coder:3b
+!ollama list
+```
+
+The model must appear in `ollama list` before running teacher evaluation or generation.
+
+### 6. Optional: authenticate W&B
+
+Training is configured to use W&B. Login is optional, but you must disable W&B or provide an account if you do not want remote logging.
 
 ```python
 import wandb
 wandb.login()
 ```
 
-Follow the prompt to authorize. Do not save an API key in a shared notebook.
+Do not put an API key in the notebook. If you prefer no W&B logging, set `WANDB_MODE=disabled` in the next shell command:
 
-### 7. Train the rank-8 QLoRA adapter
+```bash
+%env WANDB_MODE=disabled
+```
 
-Start with a small batch to fit within the T4's GPU memory. The output path is on Drive so it persists if the Colab runtime disconnects:
+### 7. Evaluate the gold teacher ceiling
+
+This uses the 500-example held-out gold set and does not modify the untouched test split.
+
+```bash
+!python -m src.teacher_eval --n 500 --workers 8
+!cp results/teacher_eval.json /content/drive/MyDrive/p5_distillation/results/
+!cat results/teacher_eval.json
+```
+
+### 8. Generate and save the training data
+
+This labels, validates, and de-duplicates the real-message pool with Ollama:
+
+```bash
+!python -m src.generate --limit 6000 --workers 8
+```
+
+For a first T4 trial, `--limit 1000` is faster. Check the generated files and copy them to Drive:
+
+```bash
+!ls -lh data/train.jsonl data/val.jsonl
+!cp data/train.jsonl data/val.jsonl /content/drive/MyDrive/p5_distillation/data/
+!cp results/generation_stats.json /content/drive/MyDrive/p5_distillation/results/
+!wc -l data/train.jsonl data/val.jsonl
+```
+
+The run creates `data/train.jsonl` and `data/val.jsonl`. Save both files because a later Colab runtime cannot otherwise retain them.
+
+### 9. Train a rank-8 QLoRA adapter
+
+The output is written directly to Drive so it survives runtime disconnection.
 
 ```bash
 !python -m src.train \
@@ -130,25 +162,33 @@ Start with a small batch to fit within the T4's GPU memory. The output path is o
   --epochs 2
 ```
 
-If the run runs out of GPU memory, retry with `--batch 1`. Training saves checkpoints by epoch; allow each epoch to finish so its checkpoint is written. When rank 8 completes, rank 32 can be tested separately with a different output directory:
+If it reports CUDA out-of-memory, retry with `--batch 1 --grad-accum 8`. Do not interrupt the notebook before epoch saving finishes.
+
+### 10. Optionally train rank 32
+
+Rank 32 usually uses more memory and takes longer. Run it only after rank 8 succeeds:
 
 ```bash
 !python -m src.train \
   --rank 32 \
   --out /content/drive/MyDrive/p5_distillation/outputs/r32 \
   --qlora \
-  --batch 2 \
-  --grad-accum 4 \
+  --batch 1 \
+  --grad-accum 8 \
   --epochs 2
 ```
 
-Check the output directory in Drive for `adapter_config.json`, `adapter_model.safetensors`, and `train_config.json`. Treat the adapter as incomplete if the run was interrupted before final saving.
+Verify that the selected output contains all final adapter files:
 
-### 8. Use the adapter in Colab
+```bash
+!ls -lh /content/drive/MyDrive/p5_distillation/outputs/r8
+```
 
-You do not need to download the adapter to your PC or move to another GPU host. Colab is the GPU host: use the same GPU runtime after training, or reconnect to a GPU runtime later. The adapter saved in Drive is a **LoRA adapter**, not a standalone model, so inference also loads its base model, `Qwen/Qwen2.5-1.5B-Instruct`.
+The directory must contain `adapter_config.json`, `adapter_model.safetensors`, and `train_config.json`. If a run is interrupted, treat that output directory as incomplete and rerun it.
 
-The inference script is included in the repository as `src/infer.py`. If you are starting a fresh Colab session, mount Drive and clone the project as in steps 3–4. Then select **Runtime → Change runtime type → T4 GPU**, and confirm the GPU is available:
+### 11. Resume in a fresh Colab runtime
+
+For a later session, remount Drive, clone or enter the project, install dependencies, and select a T4 GPU:
 
 ```python
 from google.colab import drive
@@ -156,24 +196,35 @@ drive.mount("/content/drive")
 ```
 
 ```bash
-!nvidia-smi
-```
-
-Install the inference dependencies if they are not already installed (vLLM and W&B are not needed to run inference):
-
-```python
+%cd /content
+if [ ! -d p5_distillation ]; then git clone https://github.com/karthikaditya/p5_distillation.git; fi
+%cd /content/p5_distillation
 %pip install -q "transformers>=4.44" "peft>=0.12" "accelerate>=0.33" "bitsandbytes>=0.43" "python-dotenv>=1.0"
 ```
 
-If Colab asks to restart the runtime, restart it, mount Drive again, and return to the project directory. Point `--adapter` at the output directory from step 7; use `r32` instead if that is the adapter you want to try:
+Then verify the adapter:
 
 ```bash
+!ls -l /content/drive/MyDrive/p5_distillation/outputs/r8/adapter_config.json \
+       /content/drive/MyDrive/p5_distillation/outputs/r8/adapter_model.safetensors
+```
+
+### 12. Run inference in Colab
+
+The adapter is a LoRA adapter, not a standalone model. The script loads `Qwen/Qwen2.5-1.5B-Instruct` and attaches the saved adapter.
+
+```bash
+!nvidia-smi
 !python -m src.infer \
   --adapter /content/drive/MyDrive/p5_distillation/outputs/r8 \
   --text "I lost my card and need a replacement."
 ```
 
-The script loads the base model in 4-bit on the Colab GPU, attaches the adapter, and prints the generated intent JSON. Colab GPU availability and session duration are limited, so keep the adapter in Drive. You only need a separate GPU host if you want to keep a vLLM service running or run the repository's vLLM-based benchmark, load test, and router; those steps are optional for trying the adapter in Colab.
+Use `outputs/r32` instead if rank 32 is the adapter you want to test. The script loads the base model in 4-bit and prints one JSON intent.
+
+### Optional: benchmark and router on a persistent GPU host
+
+The repository's `benchmark.py`, `load_test.py`, `serve.sh`, and `router_eval.py` require vLLM or Ollama services to remain available. They are optional for Colab adapter testing and are intended for a persistent GPU host or a Colab session kept alive with the required service processes. Do not run `src.benchmark` or `src.load_test` until the vLLM student endpoint is serving on port 8000.
 
 ## Phases → code
 | Phase | Where |
