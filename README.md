@@ -144,11 +144,36 @@ If the run runs out of GPU memory, retry with `--batch 1`. Training saves checkp
 
 Check the output directory in Drive for `adapter_config.json`, `adapter_model.safetensors`, and `train_config.json`. Treat the adapter as incomplete if the run was interrupted before final saving.
 
-### 8. Download and use the adapter
+### 8. Use the adapter in Colab
 
-Download the completed adapter directory from Google Drive, or copy it from Drive into a Colab session where you have a serving GPU. The saved files are a **LoRA adapter**, not a standalone full model; inference also requires the base model `Qwen/Qwen2.5-1.5B-Instruct`.
+You do not need to download the adapter to your PC or move to another GPU host. Colab is the GPU host: use the same GPU runtime after training, or reconnect to a GPU runtime later. The adapter saved in Drive is a **LoRA adapter**, not a standalone model, so inference also loads its base model, `Qwen/Qwen2.5-1.5B-Instruct`.
 
-This PC has no GPU, so the repository's vLLM serving and GPU benchmark phases will not run locally. Run those phases on a GPU host with vLLM installed, using the downloaded adapter and the matching base model. Colab runtimes can disconnect or expire, so keep the completed adapter and source data in Drive.
+The inference script is included in the repository as `src/infer.py`. If you are starting a fresh Colab session, mount Drive and clone the project as in steps 3–4. Then select **Runtime → Change runtime type → T4 GPU**, and confirm the GPU is available:
+
+```python
+from google.colab import drive
+drive.mount("/content/drive")
+```
+
+```bash
+!nvidia-smi
+```
+
+Install the inference dependencies if they are not already installed (vLLM and W&B are not needed to run inference):
+
+```python
+%pip install -q "transformers>=4.44" "peft>=0.12" "accelerate>=0.33" "bitsandbytes>=0.43" "python-dotenv>=1.0"
+```
+
+If Colab asks to restart the runtime, restart it, mount Drive again, and return to the project directory. Point `--adapter` at the output directory from step 7; use `r32` instead if that is the adapter you want to try:
+
+```bash
+!python -m src.infer \
+  --adapter /content/drive/MyDrive/p5_distillation/outputs/r8 \
+  --text "I lost my card and need a replacement."
+```
+
+The script loads the base model in 4-bit on the Colab GPU, attaches the adapter, and prints the generated intent JSON. Colab GPU availability and session duration are limited, so keep the adapter in Drive. You only need a separate GPU host if you want to keep a vLLM service running or run the repository's vLLM-based benchmark, load test, and router; those steps are optional for trying the adapter in Colab.
 
 ## Phases → code
 | Phase | Where |
