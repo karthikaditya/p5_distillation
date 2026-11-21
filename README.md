@@ -32,6 +32,8 @@ uvicorn src.router:app --port 8010 & python -m src.router_eval --n 300   # stude
 
 Configure `OLLAMA_MODEL` and `OLLAMA_BASE_URL` in `.env` to select the local teacher model and Ollama server. By default, `qwen2.5-coder:3b` is the Ollama teacher and `Qwen/Qwen2.5-1.5B-Instruct` is the distinct student fine-tuned with LoRA/QLoRA. The student is loaded from Hugging Face through Transformers and served through vLLM; Ollama's local teacher inference has no metered API charge, but still uses local hardware.
 
+During Phase 2, the generation script reports progress for near-duplicate removal and Ollama labeling, including processing rate and estimated time remaining.
+
 ## Fine-tune on Google Colab (T4)
 
 If your computer has no GPU, use a Colab GPU runtime for the training phase. A T4 with 15 GB of GPU memory is a reasonable starting point for QLoRA on the default 1.5B student. Colab GPU availability and runtime duration are not guaranteed; save your data and outputs to Google Drive. The training code automatically selects BF16 on supported GPUs and FP16 on a T4.

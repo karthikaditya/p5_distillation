@@ -1,0 +1,11 @@
+{
+  "teacher": "qwen2.5:1.5b",
+  "n": 200,
+  "accuracy": 0.15,
+  "invalid": 0,
+  "input_tokens": 8263,
+  "output_tokens": 2394,
+  "llm_api_cost_usd": 0.0,
+  "p50_s": 11.514127016067505,
+  "p95_s": 23.789323568344116
+}

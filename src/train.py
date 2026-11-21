@@ -49,7 +49,9 @@ def encode(row):
     full = prompt + row["messages"][-1]["content"] + tok.eos_token
     p_ids = tok(prompt, add_special_tokens=False)["input_ids"]
     ids = tok(full, add_special_tokens=False, truncation=True, max_length=a.max_len)["input_ids"]
-    return {"input_ids": ids, "attention_mask": [1] * len(ids), "labels": [-100] * len(p_ids) + ids[len(p_ids):]}
+    prompt_len = min(len(p_ids), len(ids))
+    labels = [-100] * prompt_len + ids[prompt_len:]
+    return {"input_ids": ids, "attention_mask": [1] * len(ids), "labels": labels}
 
 
 train = ds["train"].map(encode, remove_columns=ds["train"].column_names)
@@ -90,7 +92,7 @@ class ValAccuracy(TrainerCallback):
 
 
 args = TrainingArguments(
-    output_dir=a.out, num_train_epochs=a.epochs, learning_rate=a.lr, lr_scheduler_type="cosine", warmup_ratio=0.03,
+    output_dir=a.out, num_train_epochs=a.epochs, learning_rate=a.lr, lr_scheduler_type="cosine", warmup_steps=0.03,
     per_device_train_batch_size=a.batch, per_device_eval_batch_size=a.batch, gradient_accumulation_steps=a.grad_accum,
     bf16=use_bf16, fp16=torch.cuda.is_available() and not use_bf16,
     logging_steps=10, eval_strategy="epoch", save_strategy="epoch", save_total_limit=2,

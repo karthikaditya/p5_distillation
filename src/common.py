@@ -107,14 +107,18 @@ def shingles(t: str, k: int = 3):
     return {" ".join(w[i:i + k]) for i in range(max(1, len(w) - k + 1))}
 
 
-def near_dedupe(texts, threshold: float = 0.8, num_perm: int = 64):
+def near_dedupe(texts, threshold: float = 0.8, num_perm: int = 64, progress_callback=None):
     """MinHash + LSH near-duplicate removal (no extra dependency). Keeps the first of each near-duplicate group."""
     import hashlib, random
     rnd = random.Random(0)
     seeds = [rnd.getrandbits(32) for _ in range(num_perm)]
     bands, rows = 16, num_perm // 16
     buckets, kept, sigs = {}, [], []
-    for t in texts:
+    try:
+        total = len(texts)
+    except TypeError:
+        total = None
+    for i, t in enumerate(texts, 1):
         sh = shingles(t)
         sig = [min(int.from_bytes(hashlib.blake2b(f"{s}{x}".encode(), digest_size=8).digest(), "big") for x in sh) for s in seeds]
         cands = set()
@@ -123,10 +127,14 @@ def near_dedupe(texts, threshold: float = 0.8, num_perm: int = 64):
             cands |= set(buckets.get(key, []))
         dup = any(sum(a == c for a, c in zip(sig, sigs[j])) / num_perm >= threshold for j in cands)
         if dup:
+            if progress_callback:
+                progress_callback(i, total)
             continue
         idx = len(sigs)
         sigs.append(sig)
         kept.append(t)
         for b in range(bands):
             buckets.setdefault((b, tuple(sig[b * rows:(b + 1) * rows])), []).append(idx)
+        if progress_callback:
+            progress_callback(i, total)
     return kept
